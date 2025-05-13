@@ -228,6 +228,11 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
             
             is_music = gr.Checkbox(label="Music mode (better for songs)", info="Enable for more accurate song timestamps")
             transcribe_btn = gr.Button("Transcribe Uploaded File", variant="primary")
+            gr.Markdown("""
+            ### Notes:
+            - For long audio files (>5 minutes), transcription may require significant memory else oom will occur
+            - If you encounter memory errors, try processing shorter clips
+            """)
         
         with gr.Column():
             full_transcript = gr.Textbox(label="Full Transcript", lines=5)
