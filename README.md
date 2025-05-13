@@ -22,8 +22,8 @@ Install via [Pinokio](https://pinokio.computer).
 
 1. Clone this repository:
    ```
-   git clone https://github.com/SUP3RMASS1VE/Audio-Transcription-with-Timestamps-parakeet-tdt-0.6b-v2.git
-   cd Audio-Transcription-with-Timestamps-parakeet-tdt-0.6b-v2
+   git clone https://github.com/SUP3RMASS1VE/Parakeet-TDT.git
+   cd Parakeet-TDT
    ```
 
 2. Install the required dependencies:
