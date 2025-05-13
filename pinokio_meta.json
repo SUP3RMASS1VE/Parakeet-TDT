@@ -1,4 +1,22 @@
 {
-  "links": [],
-  "posts": []
+  "posts": [
+    "",
+    ""
+  ],
+  "links": [{
+    "title": "SUP3RMASS1VE (wrote the App/launcher)",
+    "links": [{
+      "type": "bitcoin",
+      "value": "1N942jHr6vVuR2KAe2JEf3nN59eR21tpKv"
+    }, {
+      "title": "X",
+      "value": "https://x.com/SUP3RMASS1VE"
+    }, {
+      "title": "Github",
+      "value": "https://github.com/SUP3RMASS1VE"
+    }, {
+      "title": "Discord",
+      "value": "https://discord.gg/mvDcrA57AQ"
+    }]
+  }]
 }
