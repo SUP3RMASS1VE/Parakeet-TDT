@@ -11,8 +11,7 @@ This is a Gradio web application that uses NVIDIA's Parakeet-TDT-0.6b model for 
 - Example audio file included for testing
 
 ## Screenshot
-
-![Screenshot 2025-05-13 142033](https://github.com/user-attachments/assets/5e5627c9-3b76-40a3-9d6b-a789d79c9358)
+![Screenshot 2025-05-13 160407](https://github.com/user-attachments/assets/8551fc0b-9b4a-42c5-8d7b-eff9150f91c3)
 
 ## Setup and Installation
  
