@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import tempfile
 import numpy as np
+import subprocess
+import math
 
 # Function to load the parakeet TDT model
 def load_model():
@@ -17,6 +19,64 @@ def load_model():
 
 # Global model variable to avoid reloading
 model = None
+
+def get_audio_duration(file_path):
+    """Get the duration of an audio file using ffprobe"""
+    cmd = [
+        'ffprobe', 
+        '-v', 'error', 
+        '-show_entries', 'format=duration', 
+        '-of', 'default=noprint_wrappers=1:nokey=1', 
+        file_path
+    ]
+    try:
+        output = subprocess.check_output(cmd).decode('utf-8').strip()
+        return float(output)
+    except (subprocess.SubprocessError, ValueError):
+        return None
+
+def split_audio_file(file_path, chunk_duration=600, progress=None):
+    """Split audio into chunks of specified duration (in seconds)"""
+    # Create temporary directory for chunks
+    temp_dir = tempfile.mkdtemp()
+    
+    # Get total duration
+    duration = get_audio_duration(file_path)
+    if not duration:
+        return None, 0
+    
+    # Calculate number of chunks
+    num_chunks = math.ceil(duration / chunk_duration)
+    chunk_files = []
+    
+    for i in range(num_chunks):
+        if progress is not None:
+            progress(i/num_chunks * 0.2, desc=f"Splitting audio ({i+1}/{num_chunks})...")
+            
+        start_time = i * chunk_duration
+        output_file = os.path.join(temp_dir, f"chunk_{i:03d}.wav")
+        
+        # Use ffmpeg to extract chunk
+        cmd = [
+            'ffmpeg',
+            '-i', file_path,
+            '-ss', str(start_time),
+            '-t', str(chunk_duration),
+            '-acodec', 'pcm_s16le',
+            '-ar', '16000',
+            '-ac', '1',
+            output_file,
+            '-y'  # Overwrite if exists
+        ]
+        
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            chunk_files.append(output_file)
+        except subprocess.CalledProcessError:
+            # If error occurs, skip this chunk
+            continue
+    
+    return chunk_files, duration
 
 def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
     global model
@@ -81,23 +141,102 @@ def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
         else:
             audio_path = audio_file
     
-    progress(0.3, desc="Transcribing audio...")
+    # Check if audio is long (>50 minutes) and needs splitting
+    duration = get_audio_duration(audio_path)
+    long_audio_threshold = 600  # 10 minutes in seconds (changed from 3000/50min)
+    chunk_duration = 600  # 10 minutes in seconds
     
-    # Transcribe with timestamps - Removed decoder_params as it's not supported
+    if duration and duration > long_audio_threshold:
+        return process_long_audio(audio_path, is_music, progress, chunk_duration)
+    
+    # Normal processing for shorter audio
+    return process_audio_chunk(audio_path, is_music, progress, 0, 1)
+
+def process_long_audio(audio_path, is_music, progress, chunk_duration):
+    """Process long audio by splitting it into chunks"""
+    # Split the audio file
+    progress(0.1, desc="Analyzing audio file...")
+    chunk_files, total_duration = split_audio_file(audio_path, chunk_duration, progress)
+    
+    if not chunk_files:
+        return "Error splitting audio file", [], None
+    
+    # Process each chunk
+    all_segments = []
+    full_text_parts = []
+    csv_data = []
+    
+    for i, chunk_file in enumerate(chunk_files):
+        chunk_start_time = i * chunk_duration
+        progress_start = 0.2 + (i / len(chunk_files)) * 0.8
+        progress_end = 0.2 + ((i + 1) / len(chunk_files)) * 0.8
+        
+        progress(progress_start, desc=f"Processing chunk {i+1}/{len(chunk_files)}...")
+        
+        # Process this chunk
+        chunk_text, chunk_segments, _ = process_audio_chunk(
+            chunk_file, 
+            is_music, 
+            progress, 
+            chunk_start_time,
+            progress_end - progress_start
+        )
+        
+        # Add to results
+        full_text_parts.append(chunk_text)
+        all_segments.extend(chunk_segments)
+        
+        # Add to CSV data
+        for segment in chunk_segments:
+            csv_data.append({
+                "Start (s)": f"{segment['start']:.2f}",
+                "End (s)": f"{segment['end']:.2f}",
+                "Segment": segment['text']
+            })
+        
+        # Clean up chunk file
+        try:
+            os.unlink(chunk_file)
+        except:
+            pass
+    
+    # Clean up temp directory
+    try:
+        os.rmdir(os.path.dirname(chunk_files[0]))
+    except:
+        pass
+    
+    # Combine results
+    full_text = " ".join(full_text_parts)
+    
+    # Create DataFrame for CSV
+    df = pd.DataFrame(csv_data)
+    
+    # Save CSV to a temporary file
+    csv_path = "transcript.csv"
+    df.to_csv(csv_path, index=False)
+    
+    progress(1.0, desc="Done!")
+    
+    return full_text, all_segments, csv_path
+
+def process_audio_chunk(audio_path, is_music, progress, time_offset=0, progress_scale=1.0):
+    """Process a single audio chunk"""
+    progress(0.3 * progress_scale, desc="Transcribing audio...")
+    
+    # Transcribe with timestamps
     output = model.transcribe([audio_path], timestamps=True)
     
     # Extract segment-level timestamps
     segments = []
-    
-    # For CSV output
     csv_data = []
     
     # Convert timestamp info to desired format
     if hasattr(output[0], 'timestamp') and 'segment' in output[0].timestamp:
         for stamp in output[0].timestamp['segment']:
             segment_text = stamp['segment']
-            start_time = stamp['start']
-            end_time = stamp['end']
+            start_time = stamp['start'] + time_offset
+            end_time = stamp['end'] + time_offset
             
             # For music, we can do some post-processing of the timestamps
             if is_music:
@@ -128,18 +267,20 @@ def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
     
     # Save CSV to a temporary file
     csv_path = "transcript.csv"
-    df.to_csv(csv_path, index=False)
+    if time_offset == 0:  # Only save for first chunk or single chunk
+        df.to_csv(csv_path, index=False)
     
     # Full transcript
     full_text = output[0].text if hasattr(output[0], 'text') else ""
     
-    progress(1.0, desc="Done!")
-    
     # Clean up the temporary file if created
-    if isinstance(audio_file, tuple) and os.path.exists(temp_audio_path):
-        os.unlink(temp_audio_path)
+    if isinstance(audio_path, str) and os.path.exists(audio_path) and audio_path.startswith(tempfile.gettempdir()):
+        try:
+            os.unlink(audio_path)
+        except:
+            pass
     
-    return full_text, segments, csv_path
+    return full_text, segments, csv_path if time_offset == 0 else None
 
 def create_transcript_table(segments):
     if not segments:
@@ -230,8 +371,8 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
             transcribe_btn = gr.Button("Transcribe Uploaded File", variant="primary")
             gr.Markdown("""
             ### Notes:
-            - For long audio files (>5 minutes), transcription may require significant memory else oom will occur
-            - If you encounter memory errors, try processing shorter clips
+            - Audio files over 10 minutes will be automatically split into smaller chunks for processing
+            - Splitting may take a few moments before transcription begins
             """)
         
         with gr.Column():
