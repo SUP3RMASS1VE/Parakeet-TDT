@@ -35,6 +35,39 @@ def get_audio_duration(file_path):
     except (subprocess.SubprocessError, ValueError):
         return None
 
+def extract_audio_from_video(video_path, progress=None):
+    """Extract audio from video file"""
+    # Use a dummy progress function if None provided
+    if progress is None:
+        progress = lambda x, desc=None: None
+    
+    progress(0.1, desc="Extracting audio from video...")
+    
+    # Create a temporary file for the extracted audio
+    temp_audio = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    audio_path = temp_audio.name
+    temp_audio.close()
+    
+    # Extract audio using ffmpeg
+    cmd = [
+        'ffmpeg',
+        '-i', video_path,
+        '-vn',  # No video
+        '-acodec', 'pcm_s16le',  # PCM 16-bit
+        '-ar', '16000',  # 16kHz sample rate
+        '-ac', '1',  # Mono
+        audio_path,
+        '-y'  # Overwrite if exists
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        progress(0.2, desc="Audio extraction complete")
+        return audio_path
+    except subprocess.CalledProcessError as e:
+        print(f"Error extracting audio: {e}")
+        return None
+
 def split_audio_file(file_path, chunk_duration=600, progress=None):
     """Split audio into chunks of specified duration (in seconds)"""
     # Create temporary directory for chunks
@@ -104,41 +137,45 @@ def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
     else:
         # For files uploaded directly, we need to convert if stereo
         import soundfile as sf
-        audio_data, sample_rate = sf.read(audio_file)
-        
-        # Convert stereo to mono if needed
-        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-            audio_data = np.mean(audio_data, axis=1)
+        try:
+            audio_data, sample_rate = sf.read(audio_file)
             
-            # For music, apply some preprocessing to improve vocal separation
-            if is_music:
-                try:
-                    # Normalize audio
-                    audio_data = audio_data / np.max(np.abs(audio_data))
-                    
-                    # Apply a simple high-pass filter to emphasize vocals (at 200Hz)
-                    from scipy import signal
-                    b, a = signal.butter(4, 200/(sample_rate/2), 'highpass')
-                    audio_data = signal.filtfilt(b, a, audio_data)
-                    
-                    # Slight compression to bring up quieter vocals
-                    threshold = 0.1
-                    ratio = 0.5
-                    audio_data = np.where(
-                        np.abs(audio_data) > threshold,
-                        threshold + (np.abs(audio_data) - threshold) * ratio * np.sign(audio_data),
-                        audio_data
-                    )
-                except ImportError:
-                    # If scipy is not available, skip preprocessing
-                    pass
-            
-            temp_audio = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            temp_audio_path = temp_audio.name
-            temp_audio.close()
-            sf.write(temp_audio_path, audio_data, sample_rate)
-            audio_path = temp_audio_path
-        else:
+            # Convert stereo to mono if needed
+            if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                audio_data = np.mean(audio_data, axis=1)
+                
+                # For music, apply some preprocessing to improve vocal separation
+                if is_music:
+                    try:
+                        # Normalize audio
+                        audio_data = audio_data / np.max(np.abs(audio_data))
+                        
+                        # Apply a simple high-pass filter to emphasize vocals (at 200Hz)
+                        from scipy import signal
+                        b, a = signal.butter(4, 200/(sample_rate/2), 'highpass')
+                        audio_data = signal.filtfilt(b, a, audio_data)
+                        
+                        # Slight compression to bring up quieter vocals
+                        threshold = 0.1
+                        ratio = 0.5
+                        audio_data = np.where(
+                            np.abs(audio_data) > threshold,
+                            threshold + (np.abs(audio_data) - threshold) * ratio * np.sign(audio_data),
+                            audio_data
+                        )
+                    except ImportError:
+                        # If scipy is not available, skip preprocessing
+                        pass
+                
+                temp_audio = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                temp_audio_path = temp_audio.name
+                temp_audio.close()
+                sf.write(temp_audio_path, audio_data, sample_rate)
+                audio_path = temp_audio_path
+            else:
+                audio_path = audio_file
+        except Exception:
+            # If we can't read it as an audio file, it might be a video
             audio_path = audio_file
     
     # Check if audio is long (>50 minutes) and needs splitting
@@ -151,6 +188,16 @@ def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
     
     # Normal processing for shorter audio
     return process_audio_chunk(audio_path, is_music, progress, 0, 1)
+
+def transcribe_video(video_file, is_music=False, progress=gr.Progress()):
+    """Transcribe the audio track from a video file"""
+    # Extract audio from video
+    audio_path = extract_audio_from_video(video_file, progress)
+    if not audio_path:
+        return "Error extracting audio from video", [], None
+    
+    # Now process the extracted audio
+    return transcribe_audio(audio_path, is_music, progress)
 
 def process_long_audio(audio_path, is_music, progress, chunk_duration):
     """Process long audio by splitting it into chunks"""
@@ -351,13 +398,16 @@ function(audio) {
 
 # Create Gradio interface
 with gr.Blocks(css="footer {visibility: hidden}") as app:
-    gr.Markdown("# Audio Transcription with Timestamps")
-    gr.Markdown("Upload an audio file or record audio to get a transcript with timestamps")
+    gr.Markdown("# Audio & Video Transcription with Timestamps")
+    gr.Markdown("Upload an audio/video file or record audio to get a transcript with timestamps")
     
     with gr.Row():
         with gr.Column():
             with gr.Tab("Upload Audio File"):
                 audio_input = gr.Audio(type="filepath", label="Upload Audio File")
+            
+            with gr.Tab("Upload Video File"):
+                video_input = gr.Video(label="Upload Video File")
             
             with gr.Tab("Microphone"):
                 audio_record = gr.Audio(
@@ -368,10 +418,12 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
                 )
             
             is_music = gr.Checkbox(label="Music mode (better for songs)", info="Enable for more accurate song timestamps")
-            transcribe_btn = gr.Button("Transcribe Uploaded File", variant="primary")
+            audio_btn = gr.Button("Transcribe Audio", variant="primary")
+            video_btn = gr.Button("Transcribe Video", variant="primary")
             gr.Markdown("""
             ### Notes:
-            - Audio files over 10 minutes will be automatically split into smaller chunks for processing
+            - Audio or video files over 10 minutes will be automatically split into smaller chunks for processing
+            - Video files will have their audio tracks extracted for transcription
             - Splitting may take a few moments before transcription begins
             """)
         
@@ -383,9 +435,16 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
             audio_playback = gr.Audio(label="Audio Playback", elem_id="audio_playback", interactive=False)
     
     # Handle transcription from file upload
-    transcribe_btn.click(
+    audio_btn.click(
         transcribe_audio, 
         inputs=[audio_input, is_music],
+        outputs=[full_transcript, transcript_segments, csv_output]
+    )
+    
+    # Handle transcription from video
+    video_btn.click(
+        transcribe_video,
+        inputs=[video_input, is_music],
         outputs=[full_transcript, transcript_segments, csv_output]
     )
     
@@ -414,6 +473,14 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
     audio_record.stop_recording(
         lambda x: x,
         inputs=[audio_record],
+        outputs=[audio_playback],
+        js=js_code
+    )
+    
+    # Handle video audio extraction for playback
+    video_input.change(
+        lambda x: extract_audio_from_video(x, None) if x else None,
+        inputs=[video_input],
         outputs=[audio_playback],
         js=js_code
     )
