@@ -1,8 +1,12 @@
 gradio>=3.50.0
 cuda-python>=12.3
 pandas>=2.0.0
-nemo-toolkit[asr]>=1.20.0
 soundfile>=0.12.0
 scipy>=1.10.0
 requests>=2.31.0
 pydantic==2.10.6
+
+# Use a maintained alternative for number‑to‑words support
+nemo-toolkit[asr]>=1.20.0
+
+https://github.com/SUP3RMASS1VE/indic_numtowords-1.0.1/releases/download/1.0.1/indic_numtowords-1.0.1-py3-none-any.whl
