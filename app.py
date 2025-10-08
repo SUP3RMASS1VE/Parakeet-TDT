@@ -13,7 +13,7 @@ import math
 def load_model():
     # Load the model from HuggingFace
     print("Loading ASR model...")
-    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v2")
+    asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
     print("Model loaded successfully!")
     return asr_model
 
@@ -187,14 +187,15 @@ def transcribe_audio(audio_file, is_music=False, progress=gr.Progress()):
         return process_long_audio(audio_path, is_music, progress, chunk_duration)
     
     # Normal processing for shorter audio
-    return process_audio_chunk(audio_path, is_music, progress, 0, 1)
+    full_text, segments, csv_path, srt_path = process_audio_chunk(audio_path, is_music, progress, 0, 1)
+    return full_text, segments, csv_path, srt_path
 
 def transcribe_video(video_file, is_music=False, progress=gr.Progress()):
     """Transcribe the audio track from a video file"""
     # Extract audio from video
     audio_path = extract_audio_from_video(video_file, progress)
     if not audio_path:
-        return "Error extracting audio from video", [], None
+        return "Error extracting audio from video", [], None, None
     
     # Now process the extracted audio
     return transcribe_audio(audio_path, is_music, progress)
@@ -263,9 +264,12 @@ def process_long_audio(audio_path, is_music, progress, chunk_duration):
     csv_path = "transcript.csv"
     df.to_csv(csv_path, index=False)
     
+    # Create SRT file
+    srt_path = create_srt_file(all_segments)
+    
     progress(1.0, desc="Done!")
     
-    return full_text, all_segments, csv_path
+    return full_text, all_segments, csv_path, srt_path
 
 def process_audio_chunk(audio_path, is_music, progress, time_offset=0, progress_scale=1.0):
     """Process a single audio chunk"""
@@ -314,8 +318,10 @@ def process_audio_chunk(audio_path, is_music, progress, time_offset=0, progress_
     
     # Save CSV to a temporary file
     csv_path = "transcript.csv"
+    srt_path = None
     if time_offset == 0:  # Only save for first chunk or single chunk
         df.to_csv(csv_path, index=False)
+        srt_path = create_srt_file(segments)
     
     # Full transcript
     full_text = output[0].text if hasattr(output[0], 'text') else ""
@@ -327,7 +333,38 @@ def process_audio_chunk(audio_path, is_music, progress, time_offset=0, progress_
         except:
             pass
     
-    return full_text, segments, csv_path if time_offset == 0 else None
+    return full_text, segments, csv_path if time_offset == 0 else None, srt_path
+
+def format_srt_time(seconds):
+    """Convert seconds to SRT time format (HH:MM:SS,mmm)"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+def create_srt_file(segments):
+    """Create an SRT subtitle file from segments"""
+    if not segments:
+        return None
+    
+    srt_content = []
+    for i, segment in enumerate(segments, 1):
+        start_time = format_srt_time(segment['start'])
+        end_time = format_srt_time(segment['end'])
+        text = segment['text']
+        
+        srt_content.append(f"{i}")
+        srt_content.append(f"{start_time} --> {end_time}")
+        srt_content.append(text)
+        srt_content.append("")  # Empty line between entries
+    
+    # Save SRT to a file
+    srt_path = "transcript.srt"
+    with open(srt_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(srt_content))
+    
+    return srt_path
 
 def create_transcript_table(segments):
     if not segments:
@@ -432,27 +469,28 @@ with gr.Blocks(css="footer {visibility: hidden}") as app:
             transcript_segments = gr.JSON(label="Segments Data", visible=False)
             transcript_html = gr.HTML(label="Transcript Segments (Click a row to play)")
             csv_output = gr.File(label="Download Transcript CSV")
+            srt_output = gr.File(label="Download Transcript SRT")
             audio_playback = gr.Audio(label="Audio Playback", elem_id="audio_playback", interactive=False)
     
     # Handle transcription from file upload
     audio_btn.click(
         transcribe_audio, 
         inputs=[audio_input, is_music],
-        outputs=[full_transcript, transcript_segments, csv_output]
+        outputs=[full_transcript, transcript_segments, csv_output, srt_output]
     )
     
     # Handle transcription from video
     video_btn.click(
         transcribe_video,
         inputs=[video_input, is_music],
-        outputs=[full_transcript, transcript_segments, csv_output]
+        outputs=[full_transcript, transcript_segments, csv_output, srt_output]
     )
     
     # Handle transcription from microphone
     audio_record.stop_recording(
         transcribe_audio,
         inputs=[audio_record, is_music],
-        outputs=[full_transcript, transcript_segments, csv_output]
+        outputs=[full_transcript, transcript_segments, csv_output, srt_output]
     )
     
     # Update the HTML when segments change
