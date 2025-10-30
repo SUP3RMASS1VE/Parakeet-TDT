@@ -1,8 +1,29 @@
+import os
+import sys
+import warnings
+import logging
+
+# Suppress all warnings and logging before importing other modules
+os.environ['NEMO_LOG_LEVEL'] = 'ERROR'
+os.environ['HYDRA_FULL_ERROR'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ['NEMO_EXPM_VERSION'] = 'NONE'
+warnings.filterwarnings('ignore')
+
+# Configure logging to suppress everything except critical errors
+logging.basicConfig(level=logging.CRITICAL)
+logging.getLogger().setLevel(logging.CRITICAL)
+
+# Suppress specific loggers before imports
+for logger_name in ['nemo_logger', 'pytorch_lightning', 'apex', 'NeMo', 'megatron', 'nemo', 'nemo.collections', 'nemo.core', 'nemo.utils']:
+    logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+    logging.getLogger(logger_name).disabled = True
+
 import gradio as gr
 import torch
 import pandas as pd
 import nemo.collections.asr as nemo_asr
-import os
 from pathlib import Path
 import tempfile
 import numpy as np
@@ -11,10 +32,8 @@ import math
 
 # Function to load the parakeet TDT model
 def load_model():
-    # Load the model from HuggingFace
-    print("Loading ASR model...")
+    # Load the model from HuggingFace (silently)
     asr_model = nemo_asr.models.ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
-    print("Model loaded successfully!")
     return asr_model
 
 # Global model variable to avoid reloading
